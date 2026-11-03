@@ -1,2 +1,3 @@
 reels_maker/example/media/
 *.mp4
+reels_maker/__pycache__/
