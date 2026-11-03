@@ -61,7 +61,7 @@ def transcribe(audio, model_size, max_chars):
             text = w.word.strip()
             if not text:
                 continue
-            if cur and (len(cur["text"]) + len(text) + 1 > max_chars or w.start - cur["end"] > 0.5):
+            if cur and (len(cur["text"]) + len(text) + 1 > max_chars or w.start - cur["end"] > 0.18):
                 chunks.append(cur); cur = None
             if cur is None:
                 cur = {"start": float(w.start), "end": float(w.end), "text": text}

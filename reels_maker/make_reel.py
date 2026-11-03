@@ -293,16 +293,29 @@ def make(project_path):
         caps = [c for c in caps if c["start"] < outro_start]  # 엔딩 카드 위엔 자막 없음
 
         logo = tmp / "logo.png"; render_logo(cfg["brand"], logo)
-        ins = ["-i", str(joined), "-loop", "1", "-i", str(logo)]
-        vf = f"[0:v][1:v]overlay=0:0:enable='lt(t,{outro_start:.3f})'[v0]"
-        last = "v0"
-        for k, c in enumerate(caps):
+        # 자막은 PNG를 시간순으로 이어 붙인 '자막 트랙' 하나로 합성 (오버레이 1회 → 빠름)
+        blank = tmp / "blank.png"; Image.new("RGBA", (W, H), (0, 0, 0, 0)).save(blank)
+        lines, t = [], 0.0
+        for k, c in enumerate(sorted(caps, key=lambda c: c["start"])):
+            st, en = max(c["start"], t), min(c["end"], outro_start)
+            if en <= st:
+                continue
+            if st > t:
+                lines += [f"file '{blank}'", f"duration {st - t:.3f}"]
             png = tmp / f"cap_{k:03d}.png"; render_caption(c["text"], cfg["style"], png)
-            ins += ["-loop", "1", "-i", str(png)]
-            end = min(c["end"], outro_start)
-            vf += f";[{last}][{k+2}:v]overlay=0:0:enable='between(t,{c['start']:.3f},{end:.3f})'[v{k+1}]"
-            last = f"v{k+1}"
-        n_in = len(caps) + 2
+            lines += [f"file '{png}'", f"duration {en - st:.3f}"]; t = en
+        lines += [f"file '{blank}'", f"duration {max(total - t, 0.04):.3f}", f"file '{blank}'"]
+        (tmp / "caps.txt").write_text("\n".join(lines) + "\n")
+        # 자막 트랙을 알파 포함 영상으로 먼저 굽는다 (타임스탬프 고정)
+        captrack = tmp / "captrack.mov"
+        run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(tmp / "caps.txt"),
+             "-vf", f"fps={FPS},format=argb", "-t", f"{total:.3f}", "-c:v", "qtrle", str(captrack)])
+        ins = ["-i", str(joined), "-loop", "1", "-i", str(logo), "-i", str(captrack)]
+        vf = (f"[2:v]format=rgba[cap];"
+              f"[0:v][1:v]overlay=0:0:enable='lt(t,{outro_start:.3f})'[v0];"
+              f"[v0][cap]overlay=0:0:eof_action=pass[v1]")
+        last = "v1"
+        n_in = 3
 
         a = cfg["audio"]; mix = [f"[0:a]volume={a['ambient_db']}dB[amb]"]; labels = ["[amb]"]
         if cfg.get("narration"):
