@@ -229,6 +229,20 @@ def main():
     lines = []
     if (sdir / "script.json").exists():
         lines = json.loads((sdir / "script.json").read_text(encoding="utf-8")).get("lines", [])
+    md = sdir / "script.md"                 # 사람이 고친 대본(script.md)이 있으면 그 글자를 우선 사용
+    if md.exists():
+        body_md = md.read_text(encoding="utf-8").split("## 녹음용 대본", 1)[-1]
+        body_md = re.split(r"\n_약|\n## ", body_md, maxsplit=1)[0]
+        sec, md_lines = "", []
+        for ln in body_md.splitlines()[1:]:
+            ln = ln.strip()
+            m = re.match(r"\*\*\[(.+?)\]\*\*", ln)
+            if m:
+                sec = m.group(1); continue
+            if ln and not ln.startswith(("#", "_", "(")):
+                md_lines.append({"section": sec, "text": ln})
+        if md_lines:
+            lines = md_lines
     syl = sum(len(re.sub(r"[^가-힣0-9]", "", l["text"])) for l in lines) or None
     out_dir0 = Path(a.out_dir).resolve() if a.out_dir else media_dir
     out_dir0.mkdir(parents=True, exist_ok=True)
