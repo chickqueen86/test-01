@@ -28,6 +28,7 @@ DEFAULTS = {
     "brand": {"parts": [["조선", "#E8202A"], ["클라쓰", "#FFFFFF"]], "size": 46, "margin": 40,
               "font": str(ROOT / "fonts/BlackHanSans-Regular.ttf")},
     "color": {"match": str(ROOT / "presets/josun_color.json"), "strength": 0.85, "saturation": 1.08},
+    "motion": {"auto": True, "threshold": 5.0, "zoom": 1.10},
     "look": {"sharpen": 0.45, "glow": 0.18, "glow_threshold": 0.78, "grain": 5, "vignette": 0},
     "audio": {"target_lufs": -17.5, "true_peak": -0.3, "lra": 5,
               "ambient_db": -10, "music_db": -20, "narration_db": 0},
@@ -140,6 +141,80 @@ def glow_graph(inp, out, lcfg):
     th = lcfg.get("glow_threshold", 0.78)
     return (f"[{inp}]split[g0][g1];[g1]curves=all='0/0 {th:.2f}/0 1/1',gblur=sigma=18[g2];"
             f"[g0][g2]blend=all_mode=screen:all_opacity={g}[{out}]")
+
+
+# ---------------------------------------------------------------- 움직임 분석 / 생성
+_AN_CACHE = {}
+
+
+def analyze_clip(path, fps=6):
+    """클립을 초당 6장으로 훑어 구간별 움직임(프레임 차이)과 선명도(라플라시안 분산)를 잰다."""
+    key = str(path)
+    if key in _AN_CACHE:
+        return _AN_CACHE[key]
+    w, h = 72, 128
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vf",
+                          f"fps={fps},scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},format=gray",
+                          "-f", "rawvideo", "-"], capture_output=True).stdout
+    fr = np.frombuffer(raw, np.uint8).reshape(-1, h, w).astype(float)
+    if len(fr) < 2:
+        _AN_CACHE[key] = None
+        return None
+    motion = np.r_[0, np.abs(np.diff(fr, axis=0)).mean(axis=(1, 2))]
+    motion[0] = motion[1]
+    lap = fr[:, 1:-1, 1:-1] * 4 - fr[:, :-2, 1:-1] - fr[:, 2:, 1:-1] - fr[:, 1:-1, :-2] - fr[:, 1:-1, 2:]
+    sharp = lap.var(axis=(1, 2))
+    res = {"t": np.arange(len(fr)) / fps, "motion": motion, "sharp": sharp}
+    _AN_CACHE[key] = res
+    return res
+
+
+def segment_motion(path, start, dur):
+    a = analyze_clip(path)
+    if a is None:
+        return 0.0
+    m = (a["t"] >= start) & (a["t"] <= start + dur)
+    return float(a["motion"][m].mean()) if m.any() else 0.0
+
+
+def best_start(path, dur, used=(), skip_head=0.5):
+    """움직임·선명도 점수가 가장 높은 구간의 시작점. 이미 쓴 구간과 겹치면 감점."""
+    a = analyze_clip(path)
+    L = probe_duration(path)
+    if a is None or L <= dur:
+        return 0.0
+    def norm(x):
+        return (x - x.min()) / (np.ptp(x) + 1e-6)
+    score = norm(a["motion"]) * 0.6 + norm(np.log1p(a["sharp"])) * 0.4
+    best, best_s = 0.0, -1e9
+    for st in np.arange(min(skip_head, max(L - dur, 0)), L - dur + 1e-6, 1 / 6):
+        m = (a["t"] >= st) & (a["t"] <= st + dur)
+        if not m.any():
+            continue
+        sc = score[m].mean()
+        for (u0, u1) in used:
+            ov = max(0, min(st + dur, u1) - max(st, u0))
+            sc -= 0.8 * ov / dur
+        if sc > best_s:
+            best, best_s = float(st), sc
+    return round(best, 3)
+
+
+MOVES = [(0.00, 0.00), (-0.03, 0.00), (0.03, 0.00), (0.00, -0.025), (0.00, 0.02)]   # 밀어넣기 + 미세 이동 방향
+
+
+def motion_filter(i, dur, mcfg):
+    """정적인 컷에 카메라 무빙 생성: 부드러운 가감속(ease-in-out) 푸시인 + 미세 슬라이드.
+    2배 해상도에서 계산해 떨림 없이 매끄럽게."""
+    z1 = float(mcfg.get("zoom", 1.10))
+    dx, dy = MOVES[i % len(MOVES)]
+    n = max(int(dur * FPS), 2)
+    ease = f"(0.5-0.5*cos(PI*on/{n}))"
+    z = f"1+({z1}-1)*{ease}"
+    x = f"(iw-iw/zoom)/2+{dx}*iw*{ease}"
+    y = f"(ih-ih/zoom)/2+{dy}*ih*{ease}"
+    return (f",scale={W*2}:{H*2}:flags=lanczos,zoompan=z='{z}':x='max(0,min(iw-iw/zoom,{x}))'"
+            f":y='max(0,min(ih-ih/zoom,{y}))':d=1:s={W}x{H}:fps={FPS}")
 
 
 # ---------------------------------------------------------------- 그래픽
@@ -255,6 +330,12 @@ def build_scene(i, sc, cfg, tmp, base):
     else:
         vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setpts=PTS/{speed},fps={FPS}"
         ins = ["-ss", str(start), "-t", str(dur * speed), "-i", str(src)]
+        mc = cfg.get("motion", {})
+        move = sc.get("move", "auto")
+        if move is True or (move == "auto" and mc.get("auto", True)
+                            and segment_motion(src, start, dur * speed) < float(mc.get("threshold", 5.0))):
+            vf += motion_filter(i, dur, mc)
+            print(f"    · 움직임 적음 → 카메라 무빙 생성")
     vf += f"{cf},setsar=1,tpad=stop_mode=clone:stop_duration=2,format=gbrp[g];" + \
         glow_graph("g", "gl", cfg.get("look")) + f";[gl]format=yuv420p{look_filter(cfg.get('look'))}"
     # 현장음 유지 (없으면 무음 트랙) - concat을 위해 모든 장면을 48k 스테레오로 통일

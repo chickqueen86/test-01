@@ -116,11 +116,10 @@ def plan_scenes(by_shot, body_len, media_dir):
             src = src or take(pref, d, name)
             sc = {"file": str(src.relative_to(media_dir)), "duration": round(d, 3), "section": name}
             if src.suffix.lower() not in make_reel.IMG_EXT:
-                L = make_reel.probe_duration(src)
-                p = pos.get(src, min(1.0, max(L - d, 0)))   # 촬영 앞 1초 여유 건너뜀
-                if p + d > L:
-                    p = max(min(1.0, L - d), 0)
-                sc["start"] = round(p, 3); pos[src] = p + d
+                # 클립에서 움직임·선명도가 가장 좋은 구간을 고르고, 이미 쓴 구간은 피함
+                used = pos.setdefault(src, [])
+                p = make_reel.best_start(src, d, used)
+                sc["start"] = p; used.append((p, p + d))
             scenes.append(sc); t += d
         sec_start = sec_end
     return scenes
