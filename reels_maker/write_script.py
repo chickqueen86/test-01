@@ -19,7 +19,7 @@ MODEL = "claude-opus-5-5"
 MEDIA_EXT = {".mp4", ".mov", ".m4v", ".jpg", ".jpeg", ".png", ".webp"}
 
 STYLE_GUIDE = """
-# 레퍼런스 대본 공식 (조선클라쓰 진흙오리 릴스 분석 결과)
+# 레퍼런스 대본 공식 (진흙오리 릴스 분석 결과)
 - 길이: 나레이션 약 43초, 전체 280~320음절 (초당 약 7음절, 빠르고 쉼 없이). 출력 전에 한글 음절 수를 세어 이 범위에 맞춘다
 - 한 줄 = 자막 1개 = 4~9자 (공백 포함), 0.5~1.5초 분량. 짧게 끊어 쓴다
 - 문장은 "-는데 / -고 / -며"로 이어 가다가 구간이 끝날 때만 "-ㅂ니다"로 맺는다
@@ -61,12 +61,15 @@ SCHEMA = {
 }
 
 
-def keyframes(media_dir, per_clip=2, max_images=20):
+def keyframes(media_dir, per_clip=2, max_images=60):
     files = sorted(p for p in Path(media_dir).rglob("*") if p.suffix.lower() in MEDIA_EXT
                    and not p.name.startswith("reel"))
+    if len(files) * per_clip > max_images:      # 클립이 많으면 클립당 1장씩 (영상 수 제한 없음)
+        per_clip = 1
     out = []
     for f in files:
         if len(out) >= max_images:
+            print(f"  (장면 {max_images}장까지만 분석에 사용, 나머지 클립은 편집에는 모두 사용됨)")
             break
         if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
             times = [None]

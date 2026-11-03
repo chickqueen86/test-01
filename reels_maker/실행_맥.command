@@ -16,6 +16,22 @@ if [ ! -d .venv ] || ! .venv/bin/python -c "import faster_whisper, yaml" 2>/dev/
   python3 -m venv .venv && .venv/bin/pip install -q --upgrade pip && .venv/bin/pip install -q -r requirements.txt || { echo "설치 실패. 이 창을 캡처해서 보내주세요."; read; exit 1; }
 fi
 
+clean(){ local p="$1"; p="${p%"${p##*[![:space:]]}"}"; p="${p//\\ / }"; p="${p#\'}"; p="${p%\'}"; echo "$p"; }
+
+setup_brand(){  # 대행사 브랜드 (왼쪽 위 로고 + 엔딩 카드). 한 번 설정하면 계속 사용
+  echo ""; echo "대행사 브랜드 설정 (영상 왼쪽 위 로고 + 마지막 엔딩 카드)"
+  read -r -p "로고 이미지(PNG, 배경 투명 권장)를 끌어다 놓거나, 글자로 쓰려면 Enter: " LOGO; LOGO="$(clean "$LOGO")"
+  if [ -n "$LOGO" ] && [ -f "$LOGO" ]; then
+    cp "$LOGO" "$HERE/brand_logo.png"
+    printf 'brand:\n  logo_image: brand_logo.png\n  logo_width: 200\n' > "$HERE/brand.yaml"
+  else
+    read -r -p "로고 대신 쓸 글자 (없으면 Enter → 로고 없이 제작): " BN
+    if [ -n "$BN" ]; then printf 'brand:\n  parts:\n    - ["%s", "#FFFFFF"]\n' "$BN" > "$HERE/brand.yaml"
+    else printf 'brand:\n  parts: []\n' > "$HERE/brand.yaml"; fi
+  fi
+  echo "저장했습니다. 바꾸려면 메뉴 4번."
+}
+
 pick_store(){   # 작업 폴더 목록에서 매장 선택
   local i=1; STORES=()
   for d in "$WORK"/*/; do [ -d "$d" ] && { STORES+=("${d%/}"); echo "  $i) $(basename "$d")"; i=$((i+1)); }; done
@@ -23,10 +39,12 @@ pick_store(){   # 작업 폴더 목록에서 매장 선택
   read -r -p "매장 번호: " n; STORE_DIR="${STORES[$((n-1))]}"
 }
 
+[ -f "$HERE/brand.yaml" ] || setup_brand
 echo ""
 echo "1) 새 매장 폴더 만들기"
 echo "2) 대본 만들기     (1_촬영 → 2_대본)"
 echo "3) 영상 완성하기   (1_촬영 + 3_녹음 → 4_완성)"
+echo "4) 대행사 로고/브랜드 바꾸기"
 read -r -p "번호 선택: " MENU
 
 if [ "$MENU" = "1" ]; then
@@ -53,5 +71,7 @@ elif [ "$MENU" = "3" ]; then
   ARGS=("$STORE_DIR/1_촬영" "$NAR" --out-dir "$STORE_DIR/4_완성" --script-dir "$STORE_DIR/2_대본")
   [ -n "$MUSIC" ] && ARGS+=(--music "$MUSIC")
   .venv/bin/python auto_edit.py "${ARGS[@]}" && open "$STORE_DIR/4_완성"
+elif [ "$MENU" = "4" ]; then
+  setup_brand
 fi
 read -r -p "끝났습니다. Enter를 누르면 창이 닫힙니다."

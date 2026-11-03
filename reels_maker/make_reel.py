@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""식당 릴스 렌더러 v2 - 레퍼런스(조선클라쓰 진흙오리 릴스) 분석값 적용.
+"""식당 릴스 렌더러 v2 - 레퍼런스(진흙오리 릴스) 분석값 적용.
 
 적용 항목 (근거: team/00_통합요약.md)
-- 색감: 레퍼런스 측정값(presets/josun_color.json)으로 클립별 색 매칭
+- 색감: 레퍼런스 측정값(presets/ref_color.json)으로 클립별 색 매칭
 - 자막: 나눔명조, 얇은 흰 글씨 + 부드러운 그림자, 화면 중앙, 컷과 독립된 전역 타임라인
 - 로고: 좌상단 작게 상시 / 엔딩: 검은 화면 + 반짝이 + 로고 + present
 - 소리: 클립 현장음(튀김·칼질) 유지, BGM은 나레이션 대비 약 -20dB, 덕킹 없음,
@@ -25,9 +25,9 @@ DEFAULTS = {
     "style": {"font": str(ROOT / "fonts/NanumMyeongjo-Regular.ttf"),
               "caption_size": 56, "caption_y": 0.45, "caption_color": "#FFFFFF",
               "shadow_blur": 10, "shadow_alpha": 235},
-    "brand": {"parts": [["조선", "#E8202A"], ["클라쓰", "#FFFFFF"]], "size": 46, "margin": 40,
+    "brand": {"parts": [], "size": 46, "margin": 40,   # 브랜드는 brand.yaml 에서 (없으면 로고 없음)
               "font": str(ROOT / "fonts/BlackHanSans-Regular.ttf")},
-    "color": {"match": str(ROOT / "presets/josun_color.json"), "strength": 0.85, "saturation": 1.08},
+    "color": {"match": str(ROOT / "presets/ref_color.json"), "strength": 0.85, "saturation": 1.08},
     "motion": {"auto": True, "threshold": 5.0, "zoom": 1.10},
     "look": {"sharpen": 0.45, "glow": 0.18, "glow_threshold": 0.78, "grain": 5, "vignette": 0},
     "audio": {"target_lufs": -17.5, "true_peak": -0.3, "lra": 5,
@@ -262,7 +262,7 @@ def render_logo(brand, out):
         logo = Image.open(brand["logo_image"]).convert("RGBA")
         lw = brand.get("logo_width", 200)
         img.alpha_composite(logo.resize((lw, int(logo.height * lw / logo.width))), (m, m))
-    else:
+    elif brand.get("parts"):
         d = ImageDraw.Draw(img); f = font(brand["font"], brand["size"]); x = m
         for txt, col in brand["parts"]:
             d.text((x, m), txt, font=f, fill=col, stroke_width=2, stroke_fill="#000000")
@@ -281,8 +281,12 @@ def render_outro(brand, ocfg, out_png):
         sd.ellipse((x - r, y - r, x + r, y + r), fill=(255, rnd.randint(150, 210), 90, a))
     img.alpha_composite(sp.filter(ImageFilter.GaussianBlur(0.8)))
     d = ImageDraw.Draw(img); f = font(brand["font"], 110)
-    tw = sum(d.textlength(t, font=f) for t, _ in brand["parts"]); x = (W - tw) / 2
-    for t, c in brand["parts"]:
+    if brand.get("logo_image"):
+        logo = Image.open(brand["logo_image"]).convert("RGBA"); lw = 520
+        logo = logo.resize((lw, int(logo.height * lw / logo.width)))
+        img.alpha_composite(logo, ((W - lw) // 2, int(H / 2 - logo.height - 10)))
+    tw = sum(d.textlength(t, font=f) for t, _ in brand.get("parts", [])); x = (W - tw) / 2
+    for t, c in brand.get("parts", []):
         d.text((x, H / 2 - 110), t, font=f, fill=c); x += d.textlength(t, font=f)
     f2 = font(DEFAULTS["style"]["font"], 46); sub = ocfg.get("text", "present")
     d.text(((W - d.textlength(sub, font=f2)) / 2, H / 2 + 20), sub, font=f2, fill="#FFFFFF")
@@ -371,6 +375,9 @@ def load_cfg(project_path):
     if cfg.get("preset"):
         preset = yaml.safe_load((base / cfg["preset"]).read_text(encoding="utf-8"))
         cfg = deep_merge(preset, cfg)
+    brand_file = ROOT / "brand.yaml"          # 대행사 공통 브랜드 설정 (실행 파일에서 한 번 입력)
+    if brand_file.exists():
+        cfg = deep_merge(yaml.safe_load(brand_file.read_text(encoding="utf-8")) or {}, cfg)
     cfg = deep_merge(DEFAULTS, cfg)
     for sec, key in (("style", "font"), ("brand", "font"), ("brand", "logo_image"),
                      ("color", "match"), ("cover", "font")):
@@ -393,7 +400,8 @@ def make(project_path):
             parts.append(p); total += d
             print(f"  [{i+1}/{len(cfg['scenes'])}] {sc['file']} ({d:.2f}s)")
         outro_start = total
-        if cfg["outro"].get("enabled", True):
+        has_brand = bool(cfg["brand"].get("parts") or cfg["brand"].get("logo_image"))
+        if cfg["outro"].get("enabled", True) and has_brand:
             p, d = build_outro(cfg, tmp); parts.append(p); total += d
 
         lst = tmp / "list.txt"

@@ -3,3 +3,5 @@ reels_maker/example/media/
 reels_maker/__pycache__/
 _script_frames/
 reels_maker/작업/*/
+reels_maker/brand.yaml
+reels_maker/brand_logo.png
