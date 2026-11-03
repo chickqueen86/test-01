@@ -58,13 +58,23 @@ def render_caption(text, style, font_path, out):
     """투명 PNG에 외곽선 자막을 그린다 (highlight 단어는 강조색)."""
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    size = style.get("caption_size", 64)
+    size = style.get("caption_size", 46)
     font = ImageFont.truetype(font_path, size)
     stroke = style.get("caption_stroke", 6)
     lines = wrap(d, text, font, W - 160)
     lh = int(size * 1.3)
-    y = int(H * style.get("caption_y", 0.62)) - lh * len(lines) // 2
+    y = int(H * style.get("caption_y", 0.45)) - lh * len(lines) // 2
     hl = style.get("highlight_words", [])
+    soft = style.get("caption_look", "soft") == "soft"
+    if soft:  # 레퍼런스 스타일: 얇은 흰 글씨 + 부드러운 그림자 (외곽선 없음)
+        from PIL import ImageFilter
+        sh = Image.new("RGBA", (W, H), (0, 0, 0, 0)); sd = ImageDraw.Draw(sh)
+        yy = y
+        for line in lines:
+            sd.text(((W - d.textlength(line, font=font)) / 2 + 2, yy + 3), line, font=font, fill=(0, 0, 0, 200))
+            yy += lh
+        img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(6)))
+        stroke = 0
     for line in lines:
         lw = d.textlength(line, font=font)
         x = (W - lw) / 2
@@ -138,6 +148,23 @@ def build_scene(i, scene, style, font_path, logo_png, tmp, base):
     return out, dur
 
 
+def build_outro(cfg, brand, font_path, tmp):
+    """검은 배경 + 가운데 로고 + 'present' 엔딩 카드."""
+    o = cfg.get("outro", {}); dur = float(o.get("duration", 1.5))
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 255)); d = ImageDraw.Draw(img)
+    font = ImageFont.truetype(font_path, 90)
+    parts = brand.get("parts") or [[brand.get("name", ""), brand.get("color", "#E8202A")]]
+    tw = sum(d.textlength(t, font=font) for t, _ in parts); x = (W - tw) / 2
+    for t, c in parts:
+        d.text((x, H / 2 - 80), t, font=font, fill=c); x += d.textlength(t, font=font)
+    f2 = ImageFont.truetype(font_path, 44); sub = o.get("text", "present")
+    d.text(((W - d.textlength(sub, font=f2)) / 2, H / 2 + 30), sub, font=f2, fill="#FFFFFF")
+    png = tmp / "outro.png"; img.save(png); out = tmp / "scene_zzz_outro.mp4"
+    run(["ffmpeg", "-y", "-v", "error", "-loop", "1", "-t", str(dur), "-i", str(png), "-vf", f"fps={FPS},format=yuv420p",
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-r", str(FPS), str(out)])
+    return out, dur
+
+
 def make(project_path):
     project_path = Path(project_path).resolve()
     base = project_path.parent
@@ -160,6 +187,9 @@ def make(project_path):
             scenes.append(p); total += d
             print(f"  [{i+1}/{len(cfg['scenes'])}] {sc['file']} ({d:.1f}s)")
 
+        if cfg.get("outro", {"enabled": True}).get("enabled", True):
+            p, d = build_outro(cfg, brand, font_path, tmp)
+            scenes.append(p); total += d
         lst = tmp / "list.txt"
         lst.write_text("".join(f"file '{p}'\n" for p in scenes))
         silent = tmp / "joined.mp4"

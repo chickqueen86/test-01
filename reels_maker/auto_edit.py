@@ -78,6 +78,7 @@ def main():
     ap.add_argument("--model", default="small", help="whisper 모델: base/small/medium (클수록 정확, 느림)")
     ap.add_argument("--max-chars", type=int, default=14, help="자막 한 조각 최대 글자수")
     ap.add_argument("--min-cut", type=float, default=1.2, help="컷 최소 길이(초)")
+    ap.add_argument("--cut", type=float, default=0.8, help="컷 하나 길이(초). 자막 하나에 컷 여러 개")
     ap.add_argument("--out", default="reel.mp4")
     a = ap.parse_args()
 
@@ -100,9 +101,22 @@ def main():
         st, en = bounds[k], bounds[k + 1]
         if scenes and en - st < a.min_cut:
             scenes[-1]["duration"] = round(scenes[-1]["duration"] + en - st, 3)
-            scenes[-1]["captions"].append(c["text"])
+            scenes[-1]["captions"] = [scenes[-1]["captions"][0] + " " + c["text"]]
             continue
-        clip = clips[i % len(clips)]; i += 1
+        n = max(1, round((en - st) / a.cut))
+        for j in range(n):
+            sub_st = st + (en - st) * j / n; sub_en = st + (en - st) * (j + 1) / n
+            clip = clips[i % len(clips)]; i += 1
+            sc = {"file": str(clip.relative_to(media_dir)) if clip.is_relative_to(media_dir) else str(clip),
+                  "duration": round(sub_en - sub_st, 3), "captions": [c["text"]]}
+            if clip.suffix.lower() not in make_reel.IMG_EXT:
+                clip_len = make_reel.probe_duration(clip)
+                pos = use_pos.get(clip, min(1.0, max(clip_len - sc["duration"], 0)))
+                if pos + sc["duration"] > clip_len:
+                    pos = 0.0
+                sc["start"] = round(pos, 3); use_pos[clip] = pos + sc["duration"]
+            scenes.append(sc)
+        continue
         sc = {"file": str(clip.relative_to(media_dir)) if clip.is_relative_to(media_dir) else str(clip),
               "duration": round(en - st, 3), "captions": [c["text"]]}
         if clip.suffix.lower() not in make_reel.IMG_EXT:
@@ -115,7 +129,7 @@ def main():
 
     cfg = yaml.safe_load(Path(a.style).read_text(encoding="utf-8")) if a.style else {}
     cfg.setdefault("brand", {"parts": [["조선", "#E8202A"], ["클라쓰", "#FFFFFF"]], "size": 62})
-    cfg.setdefault("style", {"caption_size": 64, "caption_y": 0.62})
+    cfg.setdefault("style", {})
     for key in ("font",):
         if cfg["style"].get(key):
             cfg["style"][key] = str(Path(a.style).resolve().parent / cfg["style"][key])
