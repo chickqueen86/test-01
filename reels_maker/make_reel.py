@@ -540,6 +540,26 @@ def make(project_path):
         n_in = 3
 
         a = cfg["audio"]; mix = [f"[0:a]volume={a['ambient_db']}dB[amb]"]; labels = ["[amb]"]
+        import audio_gen, re as _re
+        # 효과음: 원본에 소리가 없는 음식 컷에 굽는 소리/써는 소리 (컷 시작 0.05~0.15초 뒤)
+        if cfg.get("sfx", {}).get("enabled", True):
+            sfx_sc, t0 = [], 0.0
+            for sc in cfg["scenes"]:
+                d = float(sc.get("duration", 0)); src = (base / sc["file"]).resolve()
+                m = _re.match(r"(\d+)", src.stem); shot = int(m.group(1)) if m else 0
+                kind = None
+                if not (src.suffix.lower() not in IMG_EXT and has_audio(src)):     # 현장음 있으면 그대로 사용
+                    if shot in (1, 3, 4, 5):          # 굽기·조리·탑뷰·단면 컷
+                        kind = "crunch" if sc.get("section") == "asmr" or shot == 5 and t0 > total * 0.4 else "sizzle"
+                sfx_sc.append({"start": t0, "dur": d, "kind": kind}); t0 += d
+            if any(x["kind"] for x in sfx_sc):
+                sfx = tmp / "sfx.wav"; audio_gen.make_sfx(sfx, sfx_sc, total)
+                ins += ["-i", str(sfx)]
+                mix.append(f"[{n_in}:a]volume={cfg.get('sfx', {}).get('db', -9)}dB[sfx]"); labels.append("[sfx]"); n_in += 1
+        # 배경음악: 파일이 없으면 레퍼런스 스타일로 자동 작곡
+        if not cfg.get("music") and cfg.get("bgm", {}).get("generate", True):
+            g = tmp / "bgm.wav"; audio_gen.make_bgm(g, total + 0.5, bpm=cfg.get("bgm", {}).get("bpm", 115))
+            cfg["music"] = {"file": str(g)}
         if cfg.get("narration"):
             ins += ["-i", str(base / cfg["narration"]["file"])]
             mix.append(f"[{n_in}:a]aresample=48000,volume={a['narration_db']}dB[nar]"); labels.append("[nar]"); n_in += 1
