@@ -23,8 +23,8 @@ W, H, FPS = 1080, 1920, 30
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 DEFAULTS = {
     "style": {"font": str(ROOT / "fonts/NanumMyeongjo-Regular.ttf"),
-              "caption_size": 50, "caption_y": 0.45, "caption_color": "#FFFFFF",
-              "shadow_blur": 6, "shadow_alpha": 190},
+              "caption_size": 56, "caption_y": 0.45, "caption_color": "#FFFFFF",
+              "shadow_blur": 10, "shadow_alpha": 235},
     "brand": {"parts": [["조선", "#E8202A"], ["클라쓰", "#FFFFFF"]], "size": 46, "margin": 40,
               "font": str(ROOT / "fonts/BlackHanSans-Regular.ttf")},
     "color": {"match": str(ROOT / "presets/josun_color.json"), "strength": 0.85, "saturation": 1.08},
@@ -248,6 +248,7 @@ def render_caption(text, st, out):
         x = (W - d.textlength(line, font=f)) / 2
         sd.text((x + 2, y0 + i * lh + 3), line, font=f, fill=(0, 0, 0, st["shadow_alpha"]))
     img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(st["shadow_blur"])))
+    img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(2)))   # 가까운 그림자 (밝은 음식 위 가독성)
     for i, line in enumerate(lines):
         x = (W - d.textlength(line, font=f)) / 2
         d.text((x, y0 + i * lh), line, font=f, fill=st["caption_color"])
