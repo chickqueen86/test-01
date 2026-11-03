@@ -44,7 +44,7 @@ STYLE_GUIDE = """
 SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["facts", "unverified", "lines", "cover", "shot_notes"],
+    "required": ["facts", "unverified", "lines", "cover", "shot_notes", "section_shots"],
     "properties": {
         "facts": {"type": "array", "items": {"type": "string"},
                   "description": "대본에 쓴 사실과 그 근거(영상/검색 URL/사용자 메모)"},
@@ -55,6 +55,8 @@ SCHEMA = {
             "required": ["section", "text"],
             "properties": {"section": {"type": "string"}, "text": {"type": "string"}}}},
         "cover": {"type": "array", "items": {"type": "string"}},
+        "section_shots": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                          "description": "구간 이름(lines의 section과 같게) → 그 구간 대사와 내용이 맞는 원본 촬영 파일명 목록(확장자 포함, 예: 05_1.mov). 대사가 장어면 장어 컷만"},
         "shot_notes": {"type": "array", "items": {"type": "string"},
                        "description": "대본 구간별로 어울리는 촬영 파일과 부족한 컷"},
     },

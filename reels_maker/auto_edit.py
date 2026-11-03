@@ -31,7 +31,8 @@ SECTIONS = [
     ("asmr",   0.65, 1.71, [5, 3]),
     ("more",   1.00, 1.67, [4, 2, 8, 3, 1]),
 ]
-HOST_SHOTS = {6, 7}   # 가격 공개 순간에 길게 쓰는 사람/외관 컷 (레퍼런스 18번 2.6초)
+HOST_SHOTS = {6, 7}
+FILE_POOLS = {}       # 대본(script.json)의 section_shots: 구간별로 내용이 맞는 촬영 파일   # 가격 공개 순간에 길게 쓰는 사람/외관 컷 (레퍼런스 18번 2.6초)
 
 
 def load_clips(media_dir):
@@ -79,6 +80,52 @@ def transcribe(audio, model_size, max_chars):
     return chunks
 
 
+def tighten_narration(src, out, target_rate=7.0, max_tempo=1.3, syllables=None):
+    """나레이션 속도 자동 조절 (레퍼런스: 쉼 없이 초당 약 7음절).
+    1) 앞뒤 무음 제거, 문장 사이 0.15초 넘는 쉼을 0.1초로 줄임  2) 음높이 유지한 채 빠르게(최대 1.3배)."""
+    tmp = Path(out).with_suffix(".tight.wav")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-af",
+                    "silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.05:"
+                    "stop_periods=-1:stop_duration=0.15:stop_threshold=-40dB:stop_silence=0.1",
+                    "-ar", "48000", str(tmp)], check=True)
+    L = make_reel.probe_duration(tmp)
+    tempo = 1.0
+    if syllables:
+        tempo = min(max_tempo, max(1.0, L / (syllables / target_rate)))   # 목표 길이 = 음절 / 7
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(tmp), "-af", f"atempo={tempo:.3f},apad=pad_dur=0.3",
+                    "-ar", "48000", str(out)], check=True)
+    tmp.unlink()
+    print(f"  나레이션: 쉼 정리 {L:.1f}초 → 속도 {tempo:.2f}배 → {L / tempo:.1f}초"
+          + (f" ({syllables / (L / tempo):.1f}음절/초, 레퍼런스 7)" if syllables else ""))
+    return out
+
+
+def align_script(chunks, lines):
+    """음성인식 결과의 '시간'에 대본의 '글자'를 입힘 (받아쓰기 오타 제거).
+    인식된 글자들의 시간표를 만들고, 대본 줄마다 누적 음절 비율로 시작/끝 시간을 찾는다."""
+    tl = []
+    for c in chunks:
+        chars = [ch for ch in c["text"] if re.match(r"[가-힣0-9A-Za-z]", ch)]
+        for k, _ in enumerate(chars):
+            tl.append(c["start"] + (c["end"] - c["start"]) * (k + 0.5) / max(len(chars), 1))
+    if not tl:
+        return chunks
+    syl = [max(len(re.sub(r"[^가-힣0-9A-Za-z]", "", l["text"])), 1) for l in lines]
+    tot = sum(syl); acc = 0; out = []
+    for l, n in zip(lines, syl):
+        i0 = int(acc / tot * (len(tl) - 1)); acc += n; i1 = int(acc / tot * (len(tl) - 1))
+        out.append({"start": tl[i0] - 0.08, "end": tl[i1] + 0.1, "text": l["text"], "section": l.get("section", "")})
+    for i in range(len(out) - 1):           # 다음 자막까지 빈틈 없이
+        out[i]["end"] = out[i + 1]["start"]
+    out[0]["start"] = max(0.0, out[0]["start"])
+    return out
+
+
+SECTION_MAP = {"다른": "more", "훅": "hook", "메뉴": "price", "가격": "price", "가성비": "price", "식감": "taste",
+               "소리": "asmr", "비주얼": "asmr", "먹는": "more", "술": "more", "곁들임": "more",
+               "다른": "more", "마무리": "more"}
+
+
 def srt_time(t):
     ms = int(round(t * 1000)); h, ms = divmod(ms, 3_600_000); m, ms = divmod(ms, 60_000); s, ms = divmod(ms, 1000)
     return f"{h:02}:{m:02}:{s:02},{ms:03}"
@@ -113,8 +160,14 @@ def plan_scenes(by_shot, body_len, media_dir):
 
     def take(pref, dur, sec):
         """구간 소스 풀을 돌아가며 사용. 직전과 같은 테이크는 피함 (레퍼런스: 연속 동일 컷 없음)."""
-        pool = [s for s in pref if s in by_shot] or sorted(by_shot)
-        cands = [(sh, t) for sh in pool for t in by_shot[sh]]
+        kept = {f for v in by_shot.values() for f in v}
+        if FILE_POOLS.get(sec):                       # 대본이 정한 구간별 장면 우선
+            cands = [(0, f) for f in FILE_POOLS[sec] if f in kept]
+        else:
+            cands = []
+        if not cands:
+            pool = [s for s in pref if s in by_shot] or sorted(by_shot)
+            cands = [(sh, t) for sh in pool for t in by_shot[sh]]
         i = rot.get(sec, 0)
         for k in range(len(cands)):
             sh, f = cands[(i + k) % len(cands)]
@@ -163,6 +216,7 @@ def main():
     ap.add_argument("--max-chars", type=int, default=9, help="자막 한 조각 최대 글자수(공백 포함)")
     ap.add_argument("--out", default="reel.mp4")
     ap.add_argument("--out-dir", help="결과 저장 폴더 (기본: 촬영 폴더)")
+    ap.add_argument("--no-pace", action="store_true", help="나레이션 속도·쉼 자동 조절 끄기")
     ap.add_argument("--script-dir", help="script.json 이 있는 폴더 (표지 문구)")
     a = ap.parse_args()
 
@@ -170,17 +224,52 @@ def main():
     nar = Path(a.narration).resolve()
     by_shot = load_clips(media_dir)
     total = make_reel.probe_duration(nar)
-    outro = make_reel.DEFAULTS["outro"]["duration"]
+    import json
+    sdir = Path(a.script_dir) if a.script_dir else media_dir
+    lines = []
+    if (sdir / "script.json").exists():
+        lines = json.loads((sdir / "script.json").read_text(encoding="utf-8")).get("lines", [])
+    syl = sum(len(re.sub(r"[^가-힣0-9]", "", l["text"])) for l in lines) or None
+    out_dir0 = Path(a.out_dir).resolve() if a.out_dir else media_dir
+    out_dir0.mkdir(parents=True, exist_ok=True)
+    if not a.no_pace:
+        nar = tighten_narration(nar, out_dir0 / "narration_paced.wav", syllables=syl)
+    total = make_reel.probe_duration(nar)
+    brand_yaml = Path(make_reel.ROOT / "brand.yaml")
+    has_brand = brand_yaml.exists() and bool((yaml.safe_load(brand_yaml.read_text(encoding="utf-8")) or {}).get("brand", {}).get("parts")
+                                             or (yaml.safe_load(brand_yaml.read_text(encoding="utf-8")) or {}).get("brand", {}).get("logo_image"))
+    outro = make_reel.DEFAULTS["outro"]["duration"] if has_brand else 0.0
     body = max(total - outro, 3.0)
 
     print("▶ 나레이션 음성인식 중...")
     caps = transcribe(nar, a.model, a.max_chars)
+    sj_data = json.loads((sdir / "script.json").read_text(encoding="utf-8")) if (sdir / "script.json").exists() else {}
+    for sec_name, files in (sj_data.get("section_shots") or {}).items():
+        key = next((v for k, v in SECTION_MAP.items() if k in sec_name), sec_name)
+        FILE_POOLS.setdefault(key, [])
+        FILE_POOLS[key] += [media_dir / f for f in files if (media_dir / f).exists()]
+    if lines:
+        caps = align_script(caps, lines)      # 자막 글자는 대본 그대로, 시간만 목소리에서
+        ends = {}
+        for c in caps:
+            key = next((v for k, v in SECTION_MAP.items() if k in c.get("section", "")), None) or \
+                  (c.get("section") if c.get("section") in ("hook", "price", "taste", "asmr", "more") else None)
+            if key:
+                ends[key] = min(c["end"], body) / body
+        order = [x for x in ("hook", "price", "taste", "asmr", "more") if x in ends]
+        if order:
+            ends[order[-1]] = 1.0
+            global SECTIONS
+            base_sec = {n: (c, p) for n, _, c, p in SECTIONS}
+            SECTIONS = [(n, ends[n], base_sec[n][0], base_sec[n][1]) for n in order]
     scenes = plan_scenes(by_shot, body, media_dir)
 
     cfg = {}
     if a.preset:
         cfg["preset"] = str(Path(a.preset).resolve())
     cfg.update({"output": a.out, "narration": {"file": str(nar)}})
+    if not has_brand:
+        cfg["outro"] = {"enabled": False}
     if a.music:
         cfg["music"] = {"file": str(Path(a.music).resolve())}
     cover = a.cover.split("|") if a.cover else None
@@ -190,7 +279,8 @@ def main():
         cover = json.loads(sj.read_text(encoding="utf-8")).get("cover") or None
     if cover:
         cfg["cover"] = {"lines": cover}
-    cfg["captions"] = [{"start": round(c["start"], 3), "end": round(c["end"], 3), "text": c["text"]} for c in caps]
+    cfg["captions"] = [{"start": round(c["start"], 3), "end": round(c["end"], 3), "text": c["text"]} for c in caps
+                       if c["start"] < body]
     cfg["scenes"] = scenes
 
     out_dir = Path(a.out_dir).resolve() if a.out_dir else media_dir
