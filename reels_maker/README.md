@@ -69,7 +69,7 @@ python auto_edit.py 20261103_한우덮밥집/media 나레이션.m4a --music bgm.
 
 ## 대본 작성 (v2.3, `write_script.py`)
 촬영 폴더와 매장 이름을 넣으면 레퍼런스 공식대로 녹음용 대본(`script.md`)과 표지 문구(`script.json`)를 만듭니다.
-- Claude(claude-opus-5-5)가 클립 대표 프레임으로 메뉴와 장면을 인식하고, 웹 검색으로 메뉴·가격을 확인합니다.
+- 기본은 맥의 Claude Code(`claude -p`, API 키 불필요), `--api`를 주면 Anthropic API(claude-opus-5-5)를 씁니다. 클립 대표 프레임으로 메뉴와 장면을 인식하고, 웹 검색으로 메뉴·가격을 확인합니다.
 - 확인하지 못한 사실은 대본에 쓰지 않고 "확인 필요"에 따로 적습니다.
 - 레퍼런스와 같이 매장 이름과 위치는 나레이션에 넣지 않습니다.
 - 거절 대비 서버 측 fallback(`fallbacks: "default"`)을 켜 두었습니다.

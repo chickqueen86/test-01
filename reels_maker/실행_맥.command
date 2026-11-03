@@ -14,12 +14,9 @@ if [ ! -d .venv ] || ! .venv/bin/python -c "import anthropic, faster_whisper" 2>
   echo "필요한 프로그램 설치 중 (몇 분 걸림)..."
   python3 -m venv .venv && .venv/bin/pip install -q --upgrade pip && .venv/bin/pip install -q -r requirements.txt || { echo "설치 실패. 이 창을 캡처해서 보내주세요."; read; exit 1; }
 fi
-KEYFILE="$HOME/.reels_maker_key"
-if [ ! -s "$KEYFILE" ]; then
-  echo "Anthropic API 키가 필요합니다 (대본 작성용, 한 번만 입력). https://console.anthropic.com 에서 발급"
-  read -r -s -p "API 키 붙여넣기 후 Enter: " K; echo; echo "$K" > "$KEYFILE"; chmod 600 "$KEYFILE"
+if ! command -v claude >/dev/null; then
+  echo "[안내] 대본 만들기에는 Claude Code(claude 명령)가 필요합니다. 설치·로그인 후 다시 실행하세요."
 fi
-export ANTHROPIC_API_KEY="$(cat "$KEYFILE")"
 clean(){ local p="$1"; p="${p%"${p##*[![:space:]]}"}"; p="${p//\\ / }"; p="${p#\'}"; p="${p%\'}"; echo "$p"; }
 
 # ---------- 메뉴 ----------

@@ -8,19 +8,19 @@
 
 사용법:
   python write_script.py 촬영폴더/ "매장 이름" [--note "대표메뉴 19,900원, 하이볼 있음"]
-필요: 환경변수 ANTHROPIC_API_KEY
+기본: 맥에 설치된 Claude Code(`claude` 명령, 로그인 상태)로 실행 → API 키 불필요
+선택: --api 옵션이면 Anthropic API 사용 (ANTHROPIC_API_KEY 필요)
 """
 import argparse, base64, json, re, subprocess, sys
 from pathlib import Path
 
-import anthropic
 
 MODEL = "claude-opus-5-5"
 MEDIA_EXT = {".mp4", ".mov", ".m4v", ".jpg", ".jpeg", ".png", ".webp"}
 
 STYLE_GUIDE = """
 # 레퍼런스 대본 공식 (조선클라쓰 진흙오리 릴스 분석 결과)
-- 길이: 나레이션 약 43초, 전체 약 300음절 (초당 약 7음절, 빠르고 쉼 없이)
+- 길이: 나레이션 약 43초, 전체 280~320음절 (초당 약 7음절, 빠르고 쉼 없이). 출력 전에 한글 음절 수를 세어 이 범위에 맞춘다
 - 한 줄 = 자막 1개 = 4~9자 (공백 포함), 0.5~1.5초 분량. 짧게 끊어 쓴다
 - 문장은 "-는데 / -고 / -며"로 이어 가다가 구간이 끝날 때만 "-ㅂ니다"로 맺는다
 - 구간 순서와 비율:
@@ -33,7 +33,7 @@ STYLE_GUIDE = """
   7. 먹는 법 (29~31초): "OO와 함께 먹는 게 이 집의 킥이며"
   8. 술·곁들임 (31~35초): "병으로도 잔으로도 팝니다" 같은 짝 표현
   9. 다른 메뉴 (35~42초): 메뉴명 + 한 단어 감상 (단짠단짠 / 실패 없는 조합)
-  10. 마무리 (마지막): "저장하시고 / 꼭 가보세요" → 첫 줄 "스킵하면"으로 이어지게(루프)
+  10. 마무리: 정확히 두 줄 "저장하시고" / "꼭 가보세요" 만 쓴다 (앞에 다른 말 붙이지 않음). 첫 줄 "스킵하면"으로 이어지게(루프)
 - 반복 장치: 단돈·진짜·바삭바삭 같은 단어를 2번씩, 짝 표현(겉바속촉, 단짠단짠, 병으로도/잔으로도)
 - 금지: 매장 이름·주소·위치는 나레이션에 넣지 않는다 (레퍼런스와 동일). 이모지, 느낌표 남발 금지
 - 자막 표기: 마침표·느낌표 없음, 질문/예고에만 "..." "?" 사용
@@ -84,44 +84,43 @@ def keyframes(media_dir, per_clip=2, max_images=20):
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("media_dir"); ap.add_argument("store")
-    ap.add_argument("--note", default="", help="사장님이 아는 사실 (메뉴, 가격 등) - 검색보다 우선")
-    a = ap.parse_args()
-    media = Path(a.media_dir).resolve()
-
-    print("▶ 촬영 영상에서 장면 추출 중...")
-    frames = keyframes(media)
-    if not frames:
-        sys.exit("촬영 폴더에 영상/사진이 없습니다.")
-
-    content = []
-    for name, b64 in frames:
-        content.append({"type": "text", "text": f"[파일: {name}]"})
-        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
-    content.append({"type": "text", "text": f"""매장 이름: {a.store}
-사용자 메모(가장 정확한 정보, 검색 결과와 다르면 이것을 따름): {a.note or '없음'}
+def build_prompt(store, note, image_list_text):
+    return f"""매장 이름: {store}
+사용자 메모(가장 정확한 정보, 검색 결과와 다르면 이것을 따름): {note or '없음'}
 
 할 일:
-1. 위 촬영 장면(파일명 표시)에서 메뉴와 장면 종류를 파악한다.
+1. 촬영 장면 이미지들을 Read 도구로 모두 열어 보고 메뉴와 장면 종류를 파악한다.
+{image_list_text}
 2. 웹 검색으로 이 매장의 대표 메뉴, 가격, 특징(곁들임, 술, 다른 메뉴)을 확인한다.
 3. 아래 공식대로 나레이션 대본과 표지 3줄을 쓴다.
 규칙: 영상이나 검색 결과, 사용자 메모로 확인한 사실만 쓴다. 가격을 확인 못 했으면 가격 문장 대신
-가성비 표현을 쓰고 unverified에 적는다. 촬영에 없는 메뉴는 대본에 넣지 않는다.
+가성비 표현을 쓰고 unverified에 적는다. 촬영에 없는 메뉴는 대본에 넣지 않는다. 파일을 만들거나 수정하지 않는다.
 {STYLE_GUIDE}
-출력: 검색과 작성이 끝나면 마지막에 아래 스키마의 JSON 하나만 ```json 코드블록으로 출력한다.
-{json.dumps(SCHEMA, ensure_ascii=False)}"""})
+출력: 마지막에 아래 스키마의 JSON 하나만 ```json 코드블록으로 출력한다.
+{json.dumps(SCHEMA, ensure_ascii=False)}"""
 
+
+def run_claude_code(prompt, workdir):
+    """맥의 Claude Code를 비대화 모드로 실행 (구독 로그인 사용, API 키 불필요)."""
+    import shutil
+    if not shutil.which("claude"):
+        sys.exit("Claude Code(claude 명령)를 찾을 수 없습니다. 설치·로그인 후 다시 실행하세요.")
+    r = subprocess.run(["claude", "-p", prompt, "--output-format", "text",
+                        "--allowedTools", "Read", "WebSearch", "WebFetch"],
+                       cwd=workdir, capture_output=True, text=True, timeout=900)
+    if r.returncode:
+        sys.exit("Claude Code 실행 실패:\n" + (r.stderr or r.stdout)[-1500:])
+    return r.stdout
+
+
+def run_api(content):
+    import anthropic
     client = anthropic.Anthropic()
     messages = [{"role": "user", "content": content}]
-    print("▶ 매장 정보 검색 + 대본 작성 중 (1~3분)...")
     for _ in range(5):   # 웹 검색이 길어지면 pause_turn으로 끊겨 돌아오므로 이어서 요청
         with client.beta.messages.stream(
-            model=MODEL,
-            max_tokens=32000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
+            model=MODEL, max_tokens=32000,
+            betas=["server-side-fallback-2026-07-01"], fallbacks="default",
             output_config={"effort": "high"},
             tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}],
             messages=messages,
@@ -133,7 +132,39 @@ def main():
             messages.append({"role": "assistant", "content": resp.content})
             continue
         break
-    text = "".join(b.text for b in resp.content if b.type == "text")
+    return "".join(b.text for b in resp.content if b.type == "text")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("media_dir"); ap.add_argument("store")
+    ap.add_argument("--note", default="", help="사장님이 아는 사실 (메뉴, 가격 등) - 검색보다 우선")
+    ap.add_argument("--api", action="store_true", help="Claude Code 대신 Anthropic API 사용")
+    a = ap.parse_args()
+    media = Path(a.media_dir).resolve()
+
+    print("▶ 촬영 영상에서 장면 추출 중...")
+    frames = keyframes(media)
+    if not frames:
+        sys.exit("촬영 폴더에 영상/사진이 없습니다.")
+
+    if a.api:
+        content = []
+        for name, b64 in frames:
+            content.append({"type": "text", "text": f"[파일: {name}]"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
+        content.append({"type": "text", "text": build_prompt(a.store, a.note, "(이미지는 위에 첨부됨)")})
+        print("▶ (API) 매장 정보 검색 + 대본 작성 중 (1~3분)...")
+        text = run_api(content)
+    else:
+        fdir = media / "_script_frames"; fdir.mkdir(exist_ok=True)
+        listing = []
+        for k, (name, b64) in enumerate(frames):
+            fp = fdir / f"{k:02d}_{Path(name).stem}.jpg"
+            fp.write_bytes(base64.standard_b64decode(b64))
+            listing.append(f"   - {fp.name} (원본 파일: {name})")
+        print("▶ (Claude Code) 장면 확인 + 매장 정보 검색 + 대본 작성 중 (2~5분)...")
+        text = run_claude_code(build_prompt(a.store, a.note, "   이미지 폴더: 현재 폴더\n" + "\n".join(listing)), fdir)
     m = re.findall(r"```json\s*(\{.*?\})\s*```", text, re.S) or re.findall(r"(\{.*\})", text, re.S)
     if not m:
         sys.exit("대본 결과를 읽지 못했습니다:\n" + text[-1500:])
