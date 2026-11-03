@@ -85,6 +85,27 @@ def srt_time(t):
 
 
 def plan_scenes(by_shot, body_len, media_dir):
+    # 초점 검사: 전체 클립의 '최고 초점' 중앙값 기준으로 절대 하한을 정하고, 통째로 흐린 클립은 제외
+    all_files = [f for v in by_shot.values() for f in v]
+    peaks = []
+    for f in all_files:
+        if f.suffix.lower() in make_reel.IMG_EXT:
+            peaks.append(make_reel.image_focus(f))
+        else:
+            a = make_reel.analyze_clip(f)
+            if a is not None:
+                peaks.append(float(np.percentile(a["focus"], 90)))
+    make_reel.FOCUS_FLOOR["value"] = 0.12 * float(np.median(peaks)) if peaks else 0.0
+    for sh in list(by_shot):
+        keep = [f for f in by_shot[sh] if make_reel.clip_in_focus(f)]
+        for f in set(by_shot[sh]) - set(keep):
+            print(f"  ✕ 초점 불량으로 제외: {f.name}")
+        if keep:
+            by_shot[sh] = keep
+        else:
+            del by_shot[sh]
+    if not by_shot:
+        raise SystemExit("초점이 맞는 영상이 없습니다.")
     pos, rot, scenes, t = {}, {}, [], 0.0
     sec_start = 0.0
 
@@ -113,13 +134,21 @@ def plan_scenes(by_shot, body_len, media_dir):
             d = min(d, sec_end - t)
             if sec_end - t - d < cut * 0.5:          # 남는 자투리는 마지막 컷에 흡수
                 d = sec_end - t
-            src = src or take(pref, d, name)
-            sc = {"file": str(src.relative_to(media_dir)), "duration": round(d, 3), "section": name}
-            if src.suffix.lower() not in make_reel.IMG_EXT:
-                # 클립에서 움직임·선명도가 가장 좋은 구간을 고르고, 이미 쓴 구간은 피함
+            p = None
+            for attempt in range(12):            # 초점 맞는 구간이 있는 소스가 나올 때까지 다음 후보
+                src = src or take(pref, d, name)
+                if src.suffix.lower() in make_reel.IMG_EXT:
+                    break
                 used = pos.setdefault(src, [])
-                p = make_reel.best_start(src, d, used)
-                sc["start"] = p; used.append((p, p + d))
+                p = make_reel.best_start(src, d, used)   # 움직임·초점 최고 구간, 초점 나간 프레임 포함 구간은 제외
+                if p is not None:
+                    used.append((p, p + d)); break
+                src = None
+            if src is None:
+                raise SystemExit("초점이 맞는 구간이 부족합니다. 촬영 영상을 더 넣어 주세요.")
+            sc = {"file": str(src.relative_to(media_dir)), "duration": round(d, 3), "section": name}
+            if p is not None:
+                sc["start"] = p
             scenes.append(sc); t += d
         sec_start = sec_end
     return scenes

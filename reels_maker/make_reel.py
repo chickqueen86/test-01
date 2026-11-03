@@ -164,9 +164,47 @@ def analyze_clip(path, fps=6):
     motion[0] = motion[1]
     lap = fr[:, 1:-1, 1:-1] * 4 - fr[:, :-2, 1:-1] - fr[:, 2:, 1:-1] - fr[:, 1:-1, :-2] - fr[:, 1:-1, 2:]
     sharp = lap.var(axis=(1, 2))
-    res = {"t": np.arange(len(fr)) / fps, "motion": motion, "sharp": sharp}
+    # 초점: 화면 중앙(음식이 있는 곳) 고해상도 라플라시안 분산 (모션블러·아웃포커스 모두 낮게 나옴)
+    fw, fh = 360, 640
+    raw2 = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vf",
+                           f"fps={fps},scale={fw}:{fh}:force_original_aspect_ratio=increase,crop={fw}:{fh},"
+                           f"crop={int(fw*0.7)}:{int(fh*0.6)},format=gray", "-f", "rawvideo", "-"],
+                          capture_output=True).stdout
+    g = np.frombuffer(raw2, np.uint8).reshape(-1, int(fh*0.6), int(fw*0.7)).astype(float)[:len(fr)]
+    lap2 = g[:, 1:-1, 1:-1] * 4 - g[:, :-2, 1:-1] - g[:, 2:, 1:-1] - g[:, 1:-1, :-2] - g[:, 1:-1, 2:]
+    focus = lap2.var(axis=(1, 2))
+    n = min(len(fr), len(focus))
+    res = {"t": np.arange(n) / fps, "motion": motion[:n], "sharp": sharp[:n], "focus": focus[:n]}
     _AN_CACHE[key] = res
     return res
+
+
+FOCUS_FLOOR = {"value": 0.0}     # 전체 클립 기준 절대 하한 (auto_edit 가 설정)
+
+
+def focus_threshold(a):
+    """이 클립에서 '초점 맞음'으로 인정하는 최소값: 클립 최고 초점의 60% 와 전체 하한 중 큰 값."""
+    return max(0.6 * float(np.percentile(a["focus"], 90)), FOCUS_FLOOR["value"])
+
+
+def clip_in_focus(path):
+    """클립 전체에 초점 맞는 구간이 하나라도 있는지."""
+    if Path(path).suffix.lower() in IMG_EXT:
+        return image_focus(path) >= FOCUS_FLOOR["value"]
+    a = analyze_clip(path)
+    return a is not None and float(np.percentile(a["focus"], 90)) >= FOCUS_FLOOR["value"]
+
+
+def image_focus(path):
+    a = _AN_CACHE.get(("img", str(path)))
+    if a is None:
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vf",
+                              "scale=360:640:force_original_aspect_ratio=increase,crop=360:640,crop=252:384,format=gray",
+                              "-frames:v", "1", "-f", "rawvideo", "-"], capture_output=True).stdout
+        g = np.frombuffer(raw, np.uint8).reshape(384, 252).astype(float)
+        lap = g[1:-1, 1:-1] * 4 - g[:-2, 1:-1] - g[2:, 1:-1] - g[1:-1, :-2] - g[1:-1, 2:]
+        a = float(lap.var()); _AN_CACHE[("img", str(path))] = a
+    return a
 
 
 def segment_motion(path, start, dur):
@@ -181,15 +219,18 @@ def best_start(path, dur, used=(), skip_head=0.5):
     """움직임·선명도 점수가 가장 높은 구간의 시작점. 이미 쓴 구간과 겹치면 감점."""
     a = analyze_clip(path)
     L = probe_duration(path)
-    if a is None or L <= dur:
-        return 0.0
+    if a is None or L < dur:
+        return None
     def norm(x):
         return (x - x.min()) / (np.ptp(x) + 1e-6)
-    score = norm(a["motion"]) * 0.6 + norm(np.log1p(a["sharp"])) * 0.4
-    best, best_s = 0.0, -1e9
+    score = norm(a["motion"]) * 0.5 + norm(np.log1p(a["focus"])) * 0.5
+    thr = focus_threshold(a)
+    best, best_s = None, -1e9
     for st in np.arange(min(skip_head, max(L - dur, 0)), L - dur + 1e-6, 1 / 6):
         m = (a["t"] >= st) & (a["t"] <= st + dur)
         if not m.any():
+            continue
+        if a["focus"][m].min() < thr:        # 구간 안에 초점 나간 프레임이 하나라도 있으면 제외
             continue
         sc = score[m].mean()
         for (u0, u1) in used:
@@ -197,7 +238,7 @@ def best_start(path, dur, used=(), skip_head=0.5):
             sc -= 0.8 * ov / dur
         if sc > best_s:
             best, best_s = float(st), sc
-    return round(best, 3)
+    return None if best is None else round(best, 3)     # None = 초점 맞는 구간 없음 → 이 클립 사용 안 함
 
 
 MOVES = [(0.00, 0.00), (-0.03, 0.00), (0.03, 0.00), (0.00, -0.025), (0.00, 0.02)]   # 밀어넣기 + 미세 이동 방향
@@ -293,19 +334,47 @@ def render_outro(brand, ocfg, out_png):
     img.save(out_png)
 
 
-def render_cover(video, ccfg, out):
-    """표지: 첫 장면 프레임 + 노랑/흰 굵은 고딕 3줄 (레퍼런스 표지 공식)."""
+def pick_cover_frame(scenes, base):
+    """표지용 프레임: 모든 장면 소스 중 초점이 가장 선명한 순간 (영상은 프레임, 사진은 그대로)."""
+    best, best_s = None, -1
+    for sc in scenes:
+        src = (base / sc["file"]).resolve()
+        if src.suffix.lower() in IMG_EXT:
+            f = image_focus(src)
+            if f > best_s:
+                best, best_s = (src, None), f
+            continue
+        a = analyze_clip(src)
+        if a is None:
+            continue
+        i = int(np.argmax(a["focus"]))
+        if a["focus"][i] > best_s:
+            best, best_s = (src, float(a["t"][i])), float(a["focus"][i])
+    return best
+
+
+def render_cover(video, ccfg, out, cfg=None, scenes=None, base=None):
+    """표지: 가장 선명한 음식 프레임(색보정 적용) + 노랑/흰 굵은 고딕 3줄 (레퍼런스 표지 공식)."""
     lines = ccfg.get("lines")
     if not lines:
         return None
     frame = out.with_suffix(".frame.png")
-    run(["ffmpeg", "-y", "-v", "error", "-ss", str(ccfg.get("frame_time", 0.3)), "-i", str(video),
-         "-frames:v", "1", str(frame)])
+    pick = pick_cover_frame(scenes, base) if scenes and "frame_time" not in ccfg.get("_user", {}) else None
+    if pick:
+        src, t = pick
+        is_img = src.suffix.lower() in IMG_EXT
+        cf = color_filter(src, 0, 0, is_img, (cfg or {}).get("color"))
+        run(["ffmpeg", "-y", "-v", "error"] + ([] if t is None else ["-ss", f"{t:.2f}"]) + ["-i", str(src),
+             "-frames:v", "1", "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}{cf}", str(frame)])
+    else:
+        run(["ffmpeg", "-y", "-v", "error", "-ss", str(ccfg.get("frame_time", 0.3)), "-i", str(video),
+             "-frames:v", "1", str(frame)])
     img = Image.open(frame).convert("RGBA"); frame.unlink()
     d = ImageDraw.Draw(img)
     sizes = ccfg.get("sizes", [96, 84, 60])
     y = int(H * ccfg.get("y", 0.30))
     for i, text in enumerate(lines):
+        text = text.replace("·", ", ").replace("ㆍ", ", ")   # 표지 폰트에 가운뎃점 글자가 없음
         f = font(ccfg["font"], sizes[min(i, len(sizes) - 1)])
         col = ccfg["colors"][min(i, len(ccfg["colors"]) - 1)]
         tw = d.textlength(text, font=f)
@@ -465,7 +534,8 @@ def make(project_path):
              "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", str(out_path)])
         msg = f"완료: {out_path} ({total:.1f}s)"
         if cfg["cover"].get("enabled", True) and cfg["cover"].get("lines"):
-            cov = render_cover(joined, cfg["cover"], out_path.with_name(out_path.stem + "_cover.jpg"))
+            cov = render_cover(joined, cfg["cover"], out_path.with_name(out_path.stem + "_cover.jpg"),
+                               cfg, cfg["scenes"], base)
             msg += f"\n표지: {cov}"
         print(msg)
     finally:
