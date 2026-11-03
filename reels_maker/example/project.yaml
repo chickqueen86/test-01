@@ -1,0 +1,28 @@
+# 식당 1곳 = YAML 1개. 촬영 소스만 media/ 에 넣고 문구만 바꾸면 됩니다.
+output: reel.mp4
+
+brand:                      # 좌상단 로고 (logo_image: logo.png 로 이미지 사용 가능)
+  parts: [["조선", "#E8202A"], ["클라쓰", "#FFFFFF"]]
+  size: 62
+
+style:
+  # font: fonts/Pretendard-ExtraBold.otf   # 굵은 한글 폰트 권장
+  caption_size: 64
+  caption_y: 0.62           # 화면 높이 대비 자막 위치
+  highlight_words: ["물개박수", "1인분"]
+  highlight_color: "#FFE14D"
+
+music:                      # 선택
+  file: media/bgm.mp3
+  volume: 0.7
+
+scenes:                     # 영상/사진 섞어서 OK. 사진은 자동 줌인
+  - file: media/01.jpg
+    duration: 2.5
+    caption: "여기 진짜 미쳤습니다"
+  - file: media/02.jpg
+    duration: 3
+    captions: ["오리 한 마리 통째로", "물개박수 치게되는"]
+  - file: media/03.jpg
+    duration: 2.5
+    caption: "서울 마포구 OO식당\n저장해두세요 📌"
