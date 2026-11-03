@@ -2,3 +2,4 @@ pyyaml
 pillow
 numpy
 faster-whisper
+anthropic

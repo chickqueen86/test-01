@@ -152,8 +152,13 @@ def main():
     cfg.update({"output": a.out, "narration": {"file": str(nar)}})
     if a.music:
         cfg["music"] = {"file": str(Path(a.music).resolve())}
-    if a.cover:
-        cfg["cover"] = {"lines": a.cover.split("|")}
+    cover = a.cover.split("|") if a.cover else None
+    sj = media_dir / "script.json"          # 1단계(write_script.py)에서 만든 표지 문구 자동 사용
+    if not cover and sj.exists():
+        import json
+        cover = json.loads(sj.read_text(encoding="utf-8")).get("cover") or None
+    if cover:
+        cfg["cover"] = {"lines": cover}
     cfg["captions"] = [{"start": round(c["start"], 3), "end": round(c["end"], 3), "text": c["text"]} for c in caps]
     cfg["scenes"] = scenes
 
