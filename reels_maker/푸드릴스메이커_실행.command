@@ -1,5 +1,6 @@
 #!/bin/bash
 cd "$(dirname "$0")"
+echo "━━━━━━━━━━━━ 푸드 릴스 메이커 ━━━━━━━━━━━━"
 HERE="$(pwd)"; WORK="$HERE/작업"; mkdir -p "$WORK"
 # ---------- 준비 (처음 한 번) ----------
 if ! command -v ffmpeg >/dev/null; then
