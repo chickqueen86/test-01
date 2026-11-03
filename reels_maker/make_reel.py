@@ -27,7 +27,8 @@ DEFAULTS = {
               "shadow_blur": 6, "shadow_alpha": 190},
     "brand": {"parts": [["조선", "#E8202A"], ["클라쓰", "#FFFFFF"]], "size": 46, "margin": 40,
               "font": str(ROOT / "fonts/BlackHanSans-Regular.ttf")},
-    "color": {"match": str(ROOT / "presets/josun_color.json"), "strength": 0.85},
+    "color": {"match": str(ROOT / "presets/josun_color.json"), "strength": 0.85, "saturation": 1.08},
+    "look": {"sharpen": 0.45, "glow": 0.18, "glow_threshold": 0.78, "grain": 5, "vignette": 0},
     "audio": {"target_lufs": -17.5, "true_peak": -0.3, "lra": 5,
               "ambient_db": -10, "music_db": -20, "narration_db": 0},
     "outro": {"enabled": True, "duration": 1.3, "text": "present"},
@@ -82,11 +83,12 @@ _CF_CACHE = {}
 
 
 def color_filter(path, start, dur, is_img, ccfg):
-    """레퍼런스 평균/표준편차로 채널별 색 전이(Reinhard 방식, RGB)."""
+    """색보정: 클립의 채널별 분포(백분위)를 레퍼런스 분포에 맞추는 톤 커브 (히스토그램 매칭).
+    평균만 맞추던 v1과 달리 어두운 곳/중간/밝은 곳을 각각 맞춘다 (진한 검정, 붉은 중간톤, 광택 하이라이트)."""
     if not ccfg or not ccfg.get("match") or not Path(ccfg["match"]).exists():
         return ""
     key = str(path)
-    if key in _CF_CACHE:          # 같은 소스는 한 번만 계산 (컷마다 색이 튀지 않게 클립 전체 기준)
+    if key in _CF_CACHE:          # 같은 소스는 한 번만 계산 → 같은 테이크 컷끼리 색이 튀지 않음
         return _CF_CACHE[key]
     tgt = json.loads(Path(ccfg["match"]).read_text())
     L = 0 if is_img else probe_duration(path)
@@ -94,14 +96,50 @@ def color_filter(path, start, dur, is_img, ccfg):
     if px is None:
         return ""
     s = float(ccfg.get("strength", 0.85))
-    ms, ss = px.mean(0), np.maximum(px.std(0), 1)
-    exprs = []
-    for c in range(3):
-        mt = ms[c] + (tgt["mean"][c] - ms[c]) * s
-        st = ss[c] + (tgt["std"][c] - ss[c]) * s
-        exprs.append(f"clip((val-{ms[c]:.2f})*{st / ss[c]:.4f}+{mt:.2f}\\,0\\,255)")
-    _CF_CACHE[key] = f",lutrgb=r='{exprs[0]}':g='{exprs[1]}':b='{exprs[2]}'"
-    return _CF_CACHE[key]
+    P = tgt["percentiles"]
+    curves = []
+    for i, c in enumerate("rgb"):
+        src = np.percentile(px[:, i], P)
+        dst = np.array(tgt["pct"][c], float)
+        xs, ys = [0.0], [0.0]
+        for x, y in zip(src, dst):
+            x = x / 255; y = (x * 255 + (y - x * 255) * s) / 255
+            if x - xs[-1] < 0.01:            # 너무 붙은 점 생략
+                continue
+            xs.append(x); ys.append(max(y, ys[-1]))   # 단조 증가 유지
+        if xs[-1] < 0.999:
+            xs.append(1.0); ys.append(max(1.0 * (1 - s) + (dst[-1] / 255) * s, ys[-1]))
+        curves.append(" ".join(f"{x:.3f}/{min(y, 1):.3f}" for x, y in zip(xs, ys)))
+    f = f",curves=r='{curves[0]}':g='{curves[1]}':b='{curves[2]}'"
+    sat = ccfg.get("saturation")
+    if sat:
+        f += f",eq=saturation={sat}"
+    _CF_CACHE[key] = f
+    return f
+
+
+def look_filter(lcfg):
+    """영상 필터(룩): 선명도, 하이라이트 번짐(광택), 필름 입자, 비네트."""
+    if not lcfg:
+        return ""
+    f = ""
+    if lcfg.get("sharpen"):
+        f += f",unsharp=5:5:{lcfg['sharpen']}:5:5:0"
+    if lcfg.get("grain"):
+        f += f",noise=c0s={lcfg['grain']}:c0f=t+u"
+    if lcfg.get("vignette"):
+        f += f",vignette=angle={lcfg['vignette']}"
+    return f
+
+
+def glow_graph(inp, out, lcfg):
+    """하이라이트만 뽑아 흐리게 번지게 해서 겹침 (기름 광택·보케 느낌)."""
+    g = (lcfg or {}).get("glow")
+    if not g:
+        return f"[{inp}]null[{out}]"
+    th = lcfg.get("glow_threshold", 0.78)
+    return (f"[{inp}]split[g0][g1];[g1]curves=all='0/0 {th:.2f}/0 1/1',gblur=sigma=18[g2];"
+            f"[g0][g2]blend=all_mode=screen:all_opacity={g}[{out}]")
 
 
 # ---------------------------------------------------------------- 그래픽
@@ -217,7 +255,8 @@ def build_scene(i, sc, cfg, tmp, base):
     else:
         vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setpts=PTS/{speed},fps={FPS}"
         ins = ["-ss", str(start), "-t", str(dur * speed), "-i", str(src)]
-    vf += f"{cf},setsar=1,tpad=stop_mode=clone:stop_duration=2,format=yuv420p"
+    vf += f"{cf},setsar=1,tpad=stop_mode=clone:stop_duration=2,format=gbrp[g];" + \
+        glow_graph("g", "gl", cfg.get("look")) + f";[gl]format=yuv420p{look_filter(cfg.get('look'))}"
     # 현장음 유지 (없으면 무음 트랙) - concat을 위해 모든 장면을 48k 스테레오로 통일
     if not is_img and has_audio(src) and not sc.get("mute"):
         af = f"[0:a]atempo={speed},aresample=48000,aformat=channel_layouts=stereo,apad[a]" \
