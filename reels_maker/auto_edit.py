@@ -133,6 +133,8 @@ def main():
     ap.add_argument("--model", default="medium", help="whisper 모델 (base/small/medium)")
     ap.add_argument("--max-chars", type=int, default=9, help="자막 한 조각 최대 글자수(공백 포함)")
     ap.add_argument("--out", default="reel.mp4")
+    ap.add_argument("--out-dir", help="결과 저장 폴더 (기본: 촬영 폴더)")
+    ap.add_argument("--script-dir", help="script.json 이 있는 폴더 (표지 문구)")
     a = ap.parse_args()
 
     media_dir = Path(a.media_dir).resolve()
@@ -153,7 +155,7 @@ def main():
     if a.music:
         cfg["music"] = {"file": str(Path(a.music).resolve())}
     cover = a.cover.split("|") if a.cover else None
-    sj = media_dir / "script.json"          # 1단계(write_script.py)에서 만든 표지 문구 자동 사용
+    sj = (Path(a.script_dir) if a.script_dir else media_dir) / "script.json"          # 1단계(write_script.py)에서 만든 표지 문구 자동 사용
     if not cover and sj.exists():
         import json
         cover = json.loads(sj.read_text(encoding="utf-8")).get("cover") or None
@@ -162,9 +164,13 @@ def main():
     cfg["captions"] = [{"start": round(c["start"], 3), "end": round(c["end"], 3), "text": c["text"]} for c in caps]
     cfg["scenes"] = scenes
 
-    proj = media_dir / "project.yaml"
+    out_dir = Path(a.out_dir).resolve() if a.out_dir else media_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for sc in scenes:                      # 결과 폴더가 달라도 원본을 찾도록 절대경로
+        sc["file"] = str(media_dir / sc["file"])
+    proj = out_dir / "project.yaml"
     proj.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    (media_dir / "captions.srt").write_text("".join(
+    (out_dir / "captions.srt").write_text("".join(
         f"{n}\n{srt_time(c['start'])} --> {srt_time(c['end'])}\n{c['text']}\n\n"
         for n, c in enumerate(caps, 1)), encoding="utf-8")
     secs = {}

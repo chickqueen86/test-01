@@ -1,5 +1,6 @@
 #!/bin/bash
 cd "$(dirname "$0")"
+HERE="$(pwd)"; WORK="$HERE/작업"; mkdir -p "$WORK"
 # ---------- 준비 (처음 한 번) ----------
 if ! command -v ffmpeg >/dev/null; then
   if ! command -v brew >/dev/null; then
@@ -10,30 +11,47 @@ if ! command -v ffmpeg >/dev/null; then
   echo "ffmpeg 설치 중..."; brew install ffmpeg
 fi
 command -v python3 >/dev/null || { command -v brew >/dev/null && brew install python; }
-if [ ! -d .venv ] || ! .venv/bin/python -c "import anthropic, faster_whisper" 2>/dev/null; then
+if [ ! -d .venv ] || ! .venv/bin/python -c "import faster_whisper, yaml" 2>/dev/null; then
   echo "필요한 프로그램 설치 중 (몇 분 걸림)..."
   python3 -m venv .venv && .venv/bin/pip install -q --upgrade pip && .venv/bin/pip install -q -r requirements.txt || { echo "설치 실패. 이 창을 캡처해서 보내주세요."; read; exit 1; }
 fi
-if ! command -v claude >/dev/null; then
-  echo "[안내] 대본 만들기에는 Claude Code(claude 명령)가 필요합니다. 설치·로그인 후 다시 실행하세요."
-fi
-clean(){ local p="$1"; p="${p%"${p##*[![:space:]]}"}"; p="${p//\\ / }"; p="${p#\'}"; p="${p%\'}"; echo "$p"; }
 
-# ---------- 메뉴 ----------
+pick_store(){   # 작업 폴더 목록에서 매장 선택
+  local i=1; STORES=()
+  for d in "$WORK"/*/; do [ -d "$d" ] && { STORES+=("${d%/}"); echo "  $i) $(basename "$d")"; i=$((i+1)); }; done
+  [ ${#STORES[@]} -eq 0 ] && { echo "매장 폴더가 없습니다. 먼저 1번으로 만드세요."; read; exit 1; }
+  read -r -p "매장 번호: " n; STORE_DIR="${STORES[$((n-1))]}"
+}
+
 echo ""
-echo "1) 대본 만들기   (촬영 영상 + 매장 이름 → 녹음용 대본, 표지 문구)"
-echo "2) 영상 완성하기 (촬영 영상 + 녹음 파일 → 완성 릴스)"
+echo "1) 새 매장 폴더 만들기"
+echo "2) 대본 만들기     (1_촬영 → 2_대본)"
+echo "3) 영상 완성하기   (1_촬영 + 3_녹음 → 4_완성)"
 read -r -p "번호 선택: " MENU
-read -r -p "촬영 폴더를 끌어다 놓고 Enter: " MEDIA; MEDIA="$(clean "$MEDIA")"
+
 if [ "$MENU" = "1" ]; then
-  read -r -p "매장 이름: " STORE
+  read -r -p "매장 이름: " NAME
+  D="$WORK/${NAME// /}_$(date +%Y%m%d)"
+  mkdir -p "$D/1_촬영" "$D/2_대본" "$D/3_녹음" "$D/4_완성"
+  echo "$NAME" > "$D/.store_name"
+  echo "만들었습니다: $D"
+  echo "→ 1_촬영 폴더에 촬영 영상을 넣은 뒤 2번을 실행하세요."
+  open "$D/1_촬영"
+elif [ "$MENU" = "2" ]; then
+  pick_store
+  command -v claude >/dev/null || { echo "Claude Code(claude 명령)가 필요합니다. 설치·로그인 후 다시 실행하세요."; read; exit 1; }
+  NAME="$(cat "$STORE_DIR/.store_name" 2>/dev/null || basename "$STORE_DIR")"
   read -r -p "알고 있는 정보 (메뉴·가격 등, 없으면 Enter): " NOTE
-  .venv/bin/python write_script.py "$MEDIA" "$STORE" --note "$NOTE" && open "$MEDIA/script.md"
-else
-  read -r -p "나레이션 녹음 파일을 끌어다 놓고 Enter: " NAR
-  read -r -p "BGM 파일 (없으면 Enter): " MUSIC
-  ARGS=("$MEDIA" "$(clean "$NAR")")
-  [ -n "$MUSIC" ] && ARGS+=(--music "$(clean "$MUSIC")")
-  .venv/bin/python auto_edit.py "${ARGS[@]}" && open "$MEDIA"
+  .venv/bin/python write_script.py "$STORE_DIR/1_촬영" "$NAME" --note "$NOTE" --out "$STORE_DIR/2_대본" \
+    && open "$STORE_DIR/2_대본/script.md" && echo "→ 대본을 녹음해서 3_녹음 폴더에 넣은 뒤 3번을 실행하세요."
+elif [ "$MENU" = "3" ]; then
+  pick_store
+  NAR="$(ls "$STORE_DIR/3_녹음"/* 2>/dev/null | grep -iv bgm | grep -iE '\.(m4a|mp3|wav|aac|mp4|mov)$' | head -1)"
+  MUSIC="$(ls "$STORE_DIR/3_녹음"/* 2>/dev/null | grep -i bgm | head -1)"
+  [ -z "$NAR" ] && { echo "3_녹음 폴더에 나레이션 파일이 없습니다."; read; exit 1; }
+  echo "나레이션: $(basename "$NAR")"; [ -n "$MUSIC" ] && echo "BGM: $(basename "$MUSIC")"
+  ARGS=("$STORE_DIR/1_촬영" "$NAR" --out-dir "$STORE_DIR/4_완성" --script-dir "$STORE_DIR/2_대본")
+  [ -n "$MUSIC" ] && ARGS+=(--music "$MUSIC")
+  .venv/bin/python auto_edit.py "${ARGS[@]}" && open "$STORE_DIR/4_완성"
 fi
 read -r -p "끝났습니다. Enter를 누르면 창이 닫힙니다."

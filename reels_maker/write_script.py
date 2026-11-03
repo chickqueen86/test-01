@@ -140,8 +140,11 @@ def main():
     ap.add_argument("media_dir"); ap.add_argument("store")
     ap.add_argument("--note", default="", help="사장님이 아는 사실 (메뉴, 가격 등) - 검색보다 우선")
     ap.add_argument("--api", action="store_true", help="Claude Code 대신 Anthropic API 사용")
+    ap.add_argument("--out", help="대본 저장 폴더 (기본: 촬영 폴더)")
     a = ap.parse_args()
     media = Path(a.media_dir).resolve()
+    out = Path(a.out).resolve() if a.out else media
+    out.mkdir(parents=True, exist_ok=True)
 
     print("▶ 촬영 영상에서 장면 추출 중...")
     frames = keyframes(media)
@@ -157,7 +160,7 @@ def main():
         print("▶ (API) 매장 정보 검색 + 대본 작성 중 (1~3분)...")
         text = run_api(content)
     else:
-        fdir = media / "_script_frames"; fdir.mkdir(exist_ok=True)
+        fdir = out / "_script_frames"; fdir.mkdir(exist_ok=True)
         listing = []
         for k, (name, b64) in enumerate(frames):
             fp = fdir / f"{k:02d}_{Path(name).stem}.jpg"
@@ -172,7 +175,7 @@ def main():
     for k in SCHEMA["required"]:
         data.setdefault(k, [])
 
-    (media / "script.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out / "script.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     md = [f"# {a.store} 릴스 대본", "", "## 녹음용 대본 (한 줄씩 끊어서, 빠르게, 쉬지 않고)", ""]
     sec = None
     for ln in data["lines"]:
@@ -185,8 +188,9 @@ def main():
            "## 확인한 사실과 근거", *[f"- {f}" for f in data["facts"]], "",
            "## 확인 필요", *([f"- {u}" for u in data["unverified"]] or ["- 없음"]), "",
            "## 컷 메모", *[f"- {s}" for s in data["shot_notes"]]]
-    (media / "script.md").write_text("\n".join(md), encoding="utf-8")
-    print(f"완료: {media / 'script.md'}")
+    (out / "script.md").write_text("\n".join(md), encoding="utf-8")
+    import shutil; shutil.rmtree(out / "_script_frames", ignore_errors=True)
+    print(f"완료: {out / 'script.md'}")
     if data["unverified"]:
         print("⚠ 확인이 필요한 항목이 있습니다. script.md 의 '확인 필요'를 보세요.")
 
