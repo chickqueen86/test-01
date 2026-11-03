@@ -1,25 +1,23 @@
-식당 릴스 메이커 - 사용 설명서
+식당 릴스 메이커 - 맥 사용 설명서
 
-[처음 한 번만 설치]
-1. Python 3.10 이상 설치 (python.org, 설치할 때 "Add to PATH" 체크)
-2. ffmpeg 설치
-   - 윈도우: https://www.gyan.dev/ffmpeg/builds/ 에서 받아 PATH에 추가
-   - 맥: 터미널에서 brew install ffmpeg
-3. 처음 실행할 때 필요한 프로그램이 자동으로 설치됩니다 (몇 분 걸림, 인터넷 필요)
+[처음 한 번]
+1. 압축을 푼 폴더에서 "실행_맥.command" 를 마우스 오른쪽 클릭 → "열기" → 다시 "열기"
+   (처음엔 더블클릭하면 "확인되지 않은 개발자" 경고로 막힙니다. 오른쪽 클릭 → 열기는 한 번만 하면 됩니다)
+2. ffmpeg·Python 등이 없으면 자동으로 설치합니다. 맥 비밀번호를 물으면 입력하세요.
+   처음 실행은 10~20분 걸릴 수 있습니다 (음성인식 모델 약 1.5GB 다운로드 포함).
 
 [매번 사용]
 1. 촬영 영상을 한 폴더에 넣기. 파일 이름은 촬영 지침 컷번호로: 01_1.mp4, 05_2_best.mp4 ...
    01 훅클로즈업 02 들어올리기 03 조리 04 탑뷰 05 단면·칼질 06 진행자·인기 07 외관 08 메뉴판
-2. 윈도우: 실행_윈도우.bat 더블클릭 / 맥: 실행_맥.command 더블클릭
-3. 질문에 따라 폴더와 파일을 창에 끌어다 놓기
-4. 촬영 폴더 안에 reel.mp4(완성본), reel_cover.jpg(표지), captions.srt, project.yaml 생성
+2. "실행_맥.command" 더블클릭
+3. 질문마다 Finder에서 폴더/파일을 창으로 끌어다 놓고 Enter
+4. 끝나면 촬영 폴더가 열리고 reel.mp4(완성본), reel_cover.jpg(표지)가 있습니다.
 
 [자막 오타 고치기]
-project.yaml 을 메모장으로 열어 captions 의 text 를 고친 뒤,
-명령창에서: python make_reel.py 촬영폴더\project.yaml
-(윈도우는 .venv\Scripts\python, 맥은 .venv/bin/python)
+촬영 폴더의 project.yaml 을 텍스트편집기로 열어 captions 의 text 를 고친 뒤,
+터미널에서 (릴스메이커 폴더로 이동 후):  .venv/bin/python make_reel.py 촬영폴더/project.yaml
 
 [참고]
-- 첫 실행 때 음성인식 모델(약 1.5GB)을 내려받습니다.
-- 50초 영상 기준 렌더링 3~10분 (컴퓨터 성능에 따라 다름)
-- 폰트: 나눔명조, Black Han Sans (SIL Open Font License, 무료 상업 사용 가능)
+- 50초 영상 렌더링: M1 이상 맥 기준 약 3~5분
+- 폰트: 나눔명조, Black Han Sans (무료 상업 사용 가능)
+- 오류가 나면 터미널 창을 캡처해서 보내주세요.
