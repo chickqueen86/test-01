@@ -27,7 +27,7 @@ DEFAULTS = {
               "shadow_blur": 10, "shadow_alpha": 235},
     "brand": {"parts": [], "size": 46, "margin": 40,   # 브랜드는 brand.yaml 에서 (없으면 로고 없음)
               "font": str(ROOT / "fonts/BlackHanSans-Regular.ttf")},
-    "color": {"match": str(ROOT / "presets/ref_color.json"), "strength": 0.85, "saturation": 1.08},
+    "color": {"match": str(ROOT / "presets/ref_color.json"), "strength": 0.7, "saturation": 1.12, "mode": "tone", "warmth": 0.04},
     "motion": {"auto": True, "threshold": 5.0, "zoom": 1.10},
     "look": {"sharpen": 0.45, "glow": 0.18, "glow_threshold": 0.78, "grain": 5, "vignette": 0},
     "audio": {"target_lufs": -17.5, "true_peak": -0.3, "lra": 5,
@@ -98,6 +98,30 @@ def color_filter(path, start, dur, is_img, ccfg):
         return ""
     s = float(ccfg.get("strength", 0.85))
     P = tgt["percentiles"]
+    mode = ccfg.get("mode", "tone")
+    if mode == "tone":
+        # 밝기(명암)만 레퍼런스에 맞추고 색 비율은 원본 유지 → 음식 고유의 색을 지킴
+        luma = px @ np.array([0.299, 0.587, 0.114])
+        tl = np.array(tgt["pct"]["r"]) * 0.299 + np.array(tgt["pct"]["g"]) * 0.587 + np.array(tgt["pct"]["b"]) * 0.114
+        src = np.percentile(luma, P)
+        xs, ys = [0.0], [0.0]
+        for x, y in zip(src, tl):
+            x = x / 255; y = (x * 255 + (y - x * 255) * s) / 255
+            if x - xs[-1] < 0.01:
+                continue
+            xs.append(x); ys.append(max(y, ys[-1]))
+        if xs[-1] < 0.999:
+            xs.append(1.0); ys.append(1.0)
+        pts = " ".join(f"{x:.3f}/{min(y, 1):.3f}" for x, y in zip(xs, ys))
+        f = f",curves=all='{pts}'"
+        warm = float(ccfg.get("warmth", 0.04))
+        if warm:
+            f += f",colorbalance=rm={warm}:bm={-warm}"
+        sat = ccfg.get("saturation")
+        if sat:
+            f += f",eq=saturation={sat}"
+        _CF_CACHE[key] = f
+        return f
     curves = []
     for i, c in enumerate("rgb"):
         src = np.percentile(px[:, i], P)
