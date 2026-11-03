@@ -88,13 +88,18 @@ def plan_scenes(by_shot, body_len, media_dir):
     pos, rot, scenes, t = {}, {}, [], 0.0
     sec_start = 0.0
 
-    def take(pref, dur):
-        for shot in pref + sorted(by_shot):
-            if shot in by_shot:
-                takes = by_shot[shot]
-                k = rot.get(shot, 0); rot[shot] = k + 1
-                return takes[k % len(takes)]
-        raise SystemExit("사용할 소스가 없습니다.")
+    state = {"last": None}
+
+    def take(pref, dur, sec):
+        """구간 소스 풀을 돌아가며 사용. 직전과 같은 테이크는 피함 (레퍼런스: 연속 동일 컷 없음)."""
+        pool = [s for s in pref if s in by_shot] or sorted(by_shot)
+        cands = [(sh, t) for sh in pool for t in by_shot[sh]]
+        i = rot.get(sec, 0)
+        for k in range(len(cands)):
+            sh, f = cands[(i + k) % len(cands)]
+            if f != state["last"] or len(cands) == 1:
+                rot[sec] = i + k + 1; state["last"] = f
+                return f
 
     for name, end_ratio, cut, pref in SECTIONS:
         sec_end = body_len * end_ratio
@@ -103,12 +108,12 @@ def plan_scenes(by_shot, body_len, media_dir):
             d = cut
             src = None
             if name == "price" and first and any(s in by_shot for s in HOST_SHOTS):
-                src = take([s for s in (6, 7) if s in by_shot], 2.6); d = 2.6   # 진행자 등장 긴 컷
+                src = take([s for s in (6, 7) if s in by_shot], 2.6, 'host'); d = 2.6   # 진행자 등장 긴 컷
             first = False
             d = min(d, sec_end - t)
             if sec_end - t - d < cut * 0.5:          # 남는 자투리는 마지막 컷에 흡수
                 d = sec_end - t
-            src = src or take(pref, d)
+            src = src or take(pref, d, name)
             sc = {"file": str(src.relative_to(media_dir)), "duration": round(d, 3), "section": name}
             if src.suffix.lower() not in make_reel.IMG_EXT:
                 L = make_reel.probe_duration(src)

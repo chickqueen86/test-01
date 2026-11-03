@@ -78,12 +78,19 @@ def sample_rgb(path, start, dur, is_img):
     return np.concatenate(px) if px else None
 
 
+_CF_CACHE = {}
+
+
 def color_filter(path, start, dur, is_img, ccfg):
     """레퍼런스 평균/표준편차로 채널별 색 전이(Reinhard 방식, RGB)."""
     if not ccfg or not ccfg.get("match") or not Path(ccfg["match"]).exists():
         return ""
+    key = str(path)
+    if key in _CF_CACHE:          # 같은 소스는 한 번만 계산 (컷마다 색이 튀지 않게 클립 전체 기준)
+        return _CF_CACHE[key]
     tgt = json.loads(Path(ccfg["match"]).read_text())
-    px = sample_rgb(path, start, dur, is_img)
+    L = 0 if is_img else probe_duration(path)
+    px = sample_rgb(path, 0, L, is_img)
     if px is None:
         return ""
     s = float(ccfg.get("strength", 0.85))
@@ -93,7 +100,8 @@ def color_filter(path, start, dur, is_img, ccfg):
         mt = ms[c] + (tgt["mean"][c] - ms[c]) * s
         st = ss[c] + (tgt["std"][c] - ss[c]) * s
         exprs.append(f"clip((val-{ms[c]:.2f})*{st / ss[c]:.4f}+{mt:.2f}\\,0\\,255)")
-    return f",lutrgb=r='{exprs[0]}':g='{exprs[1]}':b='{exprs[2]}'"
+    _CF_CACHE[key] = f",lutrgb=r='{exprs[0]}':g='{exprs[1]}':b='{exprs[2]}'"
+    return _CF_CACHE[key]
 
 
 # ---------------------------------------------------------------- 그래픽
