@@ -26,3 +26,19 @@ python make_reel.py 식당A/project.yaml 식당B/project.yaml   # 여러 개 일
 | caption / captions | 자막 1개 / 여러 개(장면 시간을 균등 분할) |
 
 자막에서 `\n`으로 줄바꿈, `style.highlight_words`에 있는 단어는 강조색으로 표시됩니다.
+
+## 영상 + 나레이션 → 자동 완성 편집 (`auto_edit.py`)
+
+```bash
+pip install faster-whisper
+python auto_edit.py 20261103_한우덮밥집/media 나레이션.m4a --music bgm.mp3 [--style 브랜드템플릿.yaml]
+```
+
+1. 나레이션을 음성인식해서 14자 안팎의 짧은 자막으로 자름 (단어 단위 싱크)
+2. 자막이 바뀔 때마다 컷 전환. 촬영 지침의 파일명(`01_2_best.mp4`)을 읽어 컷 번호 순으로, `_best` 테이크를 우선 사용
+3. 영상 길이 = 나레이션 길이. BGM은 나레이션 밑으로 자동으로 낮춤(15%)
+4. 결과: `reel.mp4`, `project.yaml`(컷·자막 수정용), `captions.srt`
+
+음성인식 오타(예: 출구 → 줄고)가 있으면 `project.yaml`의 captions만 고치고 `python make_reel.py .../project.yaml`로 다시 렌더링하세요.
+정확도가 더 필요하면 `--model medium`을 쓰세요 (느려짐).
+나레이션 파일 대신 나레이션이 녹음된 영상 파일을 넣어도 됩니다.

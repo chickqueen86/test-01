@@ -121,7 +121,7 @@ def build_scene(i, scene, style, font_path, logo_png, tmp, base):
         inputs = ["-ss", str(start), "-t", str(dur * speed), "-i", str(src)]
 
     inputs += ["-i", str(logo_png)]
-    filt = f"[0:v]{vf}[v0];[v0][1:v]overlay=0:0[v1]"
+    filt = f"[0:v]{vf},tpad=stop_mode=clone:stop_duration=2[v0];[v0][1:v]overlay=0:0[v1]"
     last = "v1"
     seg = dur / max(len(caps), 1)
     for k, text in enumerate(caps):
@@ -166,13 +166,23 @@ def make(project_path):
         run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
              "-c", "copy", str(silent)])
 
-        music = cfg.get("music")
-        if music:
-            mvol = music.get("volume", 0.8)
-            run(["ffmpeg", "-y", "-v", "error", "-i", str(silent),
-                 "-stream_loop", "-1", "-ss", str(music.get("start", 0)), "-i", str(base / music["file"]),
-                 "-filter_complex",
-                 f"[1:a]volume={mvol},afade=t=out:st={max(total-1.5,0):.2f}:d=1.5[a]",
+        music, nar = cfg.get("music"), cfg.get("narration")
+        if music or nar:
+            ins, mix = ["-i", str(silent)], []
+            if nar:
+                ins += ["-i", str(base / nar["file"])]
+                mix.append(f"[{len(ins)//2 - 1}:a]volume={nar.get('volume', 1.0)},apad[n]")
+            if music:
+                ins += ["-stream_loop", "-1", "-ss", str(music.get("start", 0)), "-i", str(base / music["file"])]
+                # 나레이션이 있으면 BGM 기본 볼륨을 낮춤
+                mvol = music.get("volume", 0.15 if nar else 0.8)
+                mix.append(f"[{len(ins)//2 - 1 if not nar else 2}:a]volume={mvol},"
+                           f"afade=t=out:st={max(total-1.5,0):.2f}:d=1.5[m]")
+            labels = ("[n]" if nar else "") + ("[m]" if music else "")
+            k = labels.count("[")
+            filt = ";".join(mix) + (f";{labels}amix=inputs={k}:duration=longest:normalize=0[a]" if k > 1
+                                     else f";{labels}anull[a]")
+            run(["ffmpeg", "-y", "-v", "error", *ins, "-filter_complex", filt,
                  "-map", "0:v", "-map", "[a]", "-t", f"{total:.3f}",
                  "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
                  str(out_path)])
